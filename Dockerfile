@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     curl \
     build-essential \
+    git \
+    clang \
+    libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
