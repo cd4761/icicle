@@ -3,14 +3,15 @@ use lambdaworks_math::traits::{AsBytes, ByteConversion};
 use lambdaworks_math::unsigned_integer::element::UnsignedInteger;
 use msm::bipolynomial::BivariatePolynomial;
 
-/// Converts a slice of FrElement to a HostSlice
+/// Converts a slice of FrElement to a Vec<u8>
 fn fr_elements_to_host_slice(elements: &[FrElement]) -> Vec<u8> {
-    elements.iter().flat_map(|element| element.as_bytes()).collect()
+    elements.iter().flat_map(|element| element.to_bytes_le()).collect()
 }
 
 /// Converts a HostSlice back to a vector of FrElement
 fn host_slice_to_fr_elements(bytes: &[u8], element_count: usize) -> Vec<FrElement> {
-    let element_size = FrElement::from_raw(UnsignedInteger { limbs: [0; 4] }).as_bytes().len();
+    // Manual creation of the element size using a default zeroed UnsignedInteger
+    let element_size = UnsignedInteger::<4> { limbs: [0; 4] }.to_bytes_le().len();
 
     println!("Expected bytes length: {}", element_count * element_size);
     println!("Actual bytes length: {}", bytes.len());
@@ -23,7 +24,8 @@ fn host_slice_to_fr_elements(bytes: &[u8], element_count: usize) -> Vec<FrElemen
         .map(|i| {
             let start = i * element_size;
             let end = start + element_size;
-            FrElement::from_bytes_le(&bytes[start..end]).unwrap()
+            let uint = UnsignedInteger::<4>::from_bytes_le(&bytes[start..end]).unwrap();
+            FrElement::from_raw(uint)
         })
         .collect()
 }
@@ -34,13 +36,13 @@ fn host_slice_to_bivariate_polynomial(
     x_degree: usize,
     y_degree: usize,
 ) -> BivariatePolynomial<FrElement> {
-    let element_count = (x_degree ) * (y_degree );  
+    let element_count = (x_degree) * (y_degree);
     let fr_elements = host_slice_to_fr_elements(host_slice, element_count);
-
-    let mut coefficients: Vec<Vec<FrElement>> = vec![vec![]; x_degree ];
-    for i in 0..(x_degree ) {
-        for j in 0..(y_degree ) {
-            coefficients[i].push(fr_elements[i * (y_degree ) + j].clone());
+  
+    let mut coefficients: Vec<Vec<FrElement>> = vec![vec![]; x_degree];
+    for i in 0..(x_degree) {
+        for j in 0..(y_degree) {
+            coefficients[i].push(fr_elements[i * (y_degree) + j].clone());
         }
     }
 
@@ -50,36 +52,35 @@ fn host_slice_to_bivariate_polynomial(
 
 fn main() {
     let bp = BivariatePolynomial::new(&[
-        &[FrElement::from(2), FrElement::from(1)],
-        &[FrElement::from(1), FrElement::from(1)],
+        &[FrElement::from(2u64), FrElement::from(1u64)],
+        &[FrElement::from(1u64), FrElement::from(1u64)],
     ]);
 
     let flattened_elements = bp.flatten_out();
 
     let coefficients_x_y: Vec<_> = flattened_elements
-            .iter()
-            .map(|coefficient| coefficient.representative())
-            .collect();
+        .iter()
+        .map(|coefficient| coefficient.representative())
+        .collect();
 
     let bytes = fr_elements_to_host_slice(&flattened_elements);
     let host_slice: &[u8] = &bytes;
 
-    println!("host_slice length: {}", host_slice.len());
-    println!("bp.flatten_out: {:?}", coefficients_x_y);
-    println!("Expected total elements: {}", (bp.x_degree ) * (bp.y_degree ));
+    println!("host_slice: {:?}", host_slice);
+    println!("Original coefficients_x_y: {:?}", coefficients_x_y);
 
     // Corrected assertion for length
     assert!(host_slice.len() >= flattened_elements.len() * FrElement::from_raw(UnsignedInteger { limbs: [0; 4] }).as_bytes().len());
 
     let recovered_bp = host_slice_to_bivariate_polynomial(&host_slice[..], bp.x_degree, bp.y_degree);
 
-    println!("Original BivariatePolynomial: {:?}", bp);
-    println!("Recovered BivariatePolynomial: {:?}", recovered_bp);
+    // println!("Original BivariatePolynomial: {:?}", bp);
+    // println!("Recovered BivariatePolynomial: {:?}", recovered_bp.flatten_out());
     let flattend = recovered_bp.flatten_out();
 
     let recovered_coefficients_x_y: Vec<_> = flattend
         .iter()
-        .map(|coefficient| coefficient.representative())
+        .map(|coefficient| coefficient.value())
         .collect();
     println!("Recovered coefficient: {:?}", recovered_coefficients_x_y);
 }

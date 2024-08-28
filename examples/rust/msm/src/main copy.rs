@@ -52,7 +52,7 @@ fn main() {
     println!("upper_scalars: {:?}", upper_scalars);
 
     for i in lower_bound..=upper_bound {
-        let log_size = i;
+        let log_size = i;ssdadd
         let size = 1 << log_size;
         println!(
             "---------------------- MSM size 2^{}={} ------------------------",
