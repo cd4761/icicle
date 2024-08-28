@@ -17,7 +17,6 @@ use ark_bn254::{Fr as Bn254Fr, G1Affine as Bn254G1Affine, G1Projective as Bn254A
 #[cfg(feature = "arkworks")]
 use ark_ec::scalar_mul::variable_base::VariableBaseMSM;
 
-#[cfg(feature = "lambdaworks")]
 use lambdaworks_math::{
     cyclic_group::IsGroup,
     elliptic_curve::traits::IsPairing,
@@ -163,7 +162,7 @@ fn main() {
             let start = Instant::now();
             let msm_result = pippenger::msm(&lamda_scalars, &lamda_points).expect("MSM calculation failed");
             println!("Lambdaworks result: {:?}", msm_result);
-            
+
             #[cfg(feature = "profile")]
             println!(
                 "Lambda bls12_381 MSM on size 2^{log_size} took: {} ms",
