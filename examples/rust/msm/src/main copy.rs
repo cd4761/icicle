@@ -154,7 +154,7 @@ fn main() {
                 ]))
                 .collect();
             
-            println!("lambda points: {:?}", lamda_points[0]);
+            // println!("lambda points: {:?}", lamda_points[0]);
 
             let lamda_scalars: Vec<UnsignedInteger<4>> = upper_scalars[..size]
                 .iter()
@@ -165,6 +165,17 @@ fn main() {
             let start = Instant::now();
             let msm_result = pippenger::msm(&lamda_scalars, &lamda_points).expect("MSM calculation failed");
             println!("Lambdaworks result: {:?}", msm_result);
+            println!("host result: {:?}", msm_host_result[0]);
+
+            let hex_result = msm_result.to_affine().0.value;
+            
+            // let msm_result_hex: Vec<String> = msm_result
+            //     .iter()
+            //     .map(|ui| FrElement::from_raw(ui.clone())) // UnsignedInteger를 FrElement로 변환
+            //     .collect();
+               
+                
+            println!("hex_result: {:?}", hex_result);
 
             #[cfg(feature = "profile")]
             println!(

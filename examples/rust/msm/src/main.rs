@@ -4,8 +4,8 @@ use lambdaworks_math::unsigned_integer::element::UnsignedInteger;
 use msm::bipolynomial::BivariatePolynomial;
 
 /// Converts a slice of FrElement to a Vec<u8>
-fn fr_elements_to_host_slice(elements: &[FrElement]) -> Vec<u8> {
-    elements.iter().flat_map(|element| element.to_bytes_le()).collect()
+fn fr_elements_to_host_slice(elements: &Vec<UnsignedInteger<4>>) -> Vec<u8> {
+    elements.iter().flat_map(|element| element.to_bytes_be()).collect()
 }
 
 /// Converts a HostSlice back to a vector of FrElement
@@ -52,8 +52,8 @@ fn host_slice_to_bivariate_polynomial(
 
 fn main() {
     let bp = BivariatePolynomial::new(&[
-        &[FrElement::from(2u64), FrElement::from(1u64)],
-        &[FrElement::from(1u64), FrElement::from(1u64)],
+        &[FrElement::from(0x357afc97d7fcf759e8aa0195a32a2d9b05284522a3aa15731a70b8ed9ceb8927), FrElement::from(0x446333949fbb83a6eee08acaa6a55a3708a868d2031b6ff6bd49220ac2bf7f0f)],
+        &[FrElement::from(0x0b4e13ed7b6938a2e665d5632c5b81a57b4742ad1a369f14c0bf7193b22cb86a), FrElement::from(0x6468971c2e0156d06383e859e2dffe692691ef3e4a4a2b23929485bb3b188e8c)],
     ]);
 
     let flattened_elements = bp.flatten_out();
@@ -62,10 +62,15 @@ fn main() {
         .iter()
         .map(|coefficient| coefficient.representative())
         .collect();
+    
+    let coefficients_x: Vec<_> = flattened_elements
+        .iter()
+        .map(|coefficient| coefficient.representative().limbs[3])
+        .collect();
 
-    let bytes = fr_elements_to_host_slice(&flattened_elements);
+    let bytes = fr_elements_to_host_slice(&coefficients_x_y);
     let host_slice: &[u8] = &bytes;
-
+    println!("coeff: {:?}", coefficients_x);
     println!("host_slice: {:?}", host_slice);
     println!("Original coefficients_x_y: {:?}", coefficients_x_y);
 
@@ -84,3 +89,4 @@ fn main() {
         .collect();
     println!("Recovered coefficient: {:?}", recovered_coefficients_x_y);
 }
+

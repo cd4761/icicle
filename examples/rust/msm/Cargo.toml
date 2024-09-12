@@ -22,5 +22,5 @@ rustyline = "12"
 
 [features]
 arkworks = ["ark-bn254", "ark-bls12-377", "ark-ec", "icicle-core/arkworks", "icicle-bn254/arkworks", "icicle-bls12-377/arkworks"]
-lambdaworks = ["lambdaworks_math"]
+lambdaworks = []
 profile = []
