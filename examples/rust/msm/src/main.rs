@@ -1,92 +1,141 @@
-use lambdaworks_math::elliptic_curve::short_weierstrass::curves::bls12_381::default_types::FrElement;
-use lambdaworks_math::traits::{AsBytes, ByteConversion};
-use lambdaworks_math::unsigned_integer::element::UnsignedInteger;
-use msm::bipolynomial::BivariatePolynomial;
+use icicle_bls12_381::curve;
+use icicle_core::{error::IcicleError, msm, traits::FieldImpl};
+use icicle_cuda_runtime::{ memory::{DeviceVec, HostSlice}, stream::CudaStream};
+use lambdaworks_math::{
+    elliptic_curve::short_weierstrass::{
+        curves::bls12_381::{curve::{BLS12381Curve, BLS12381FieldElement}},
+        point::ShortWeierstrassProjectivePoint,
+    },
+    field::element::FieldElement,
+    unsigned_integer::element::UnsignedInteger,
+    traits::ByteConversion,
+    errors::ByteConversionError,
+    msm::pippenger,
+};
+use hex;
 
-/// Converts a slice of FrElement to a Vec<u8>
-fn fr_elements_to_host_slice(elements: &Vec<UnsignedInteger<4>>) -> Vec<u8> {
-    elements.iter().flat_map(|element| element.to_bytes_be()).collect()
+// Type alias for better readability
+type BlsG1point = ShortWeierstrassProjectivePoint<BLS12381Curve>;
+
+// Trait to handle scalar conversion
+trait ToIcicle {
+    fn to_icicle_scalar(&self) -> curve::ScalarField;
+    fn to_icicle(&self) -> curve::BaseField;
+    fn from_icicle(icicle: &curve::BaseField) -> Result<Self, ByteConversionError>
+    where
+        Self: Sized;
 }
 
-/// Converts a HostSlice back to a vector of FrElement
-fn host_slice_to_fr_elements(bytes: &[u8], element_count: usize) -> Vec<FrElement> {
-    // Manual creation of the element size using a default zeroed UnsignedInteger
-    let element_size = UnsignedInteger::<4> { limbs: [0; 4] }.to_bytes_le().len();
-
-    println!("Expected bytes length: {}", element_count * element_size);
-    println!("Actual bytes length: {}", bytes.len());
-
-    if bytes.len() < element_count * element_size {
-        panic!("Insufficient bytes length for the number of elements");
+impl ToIcicle for BLS12381FieldElement {
+    fn to_icicle_scalar(&self) -> curve::ScalarField {
+        let scalar_bytes = self.to_bytes_le();
+        curve::ScalarField::from_bytes_le(&scalar_bytes)
     }
 
-    (0..element_count)
-        .map(|i| {
-            let start = i * element_size;
-            let end = start + element_size;
-            let uint = UnsignedInteger::<4>::from_bytes_le(&bytes[start..end]).unwrap();
-            FrElement::from_raw(uint)
-        })
-        .collect()
+    fn to_icicle(&self) -> curve::BaseField {
+        curve::BaseField::from_bytes_le(&self.to_bytes_le())
+    }
+
+    fn from_icicle(icicle: &curve::BaseField) -> Result<Self, ByteConversionError> {
+        Self::from_bytes_le(&icicle.to_bytes_le())
+    }
 }
 
-/// Converts a HostSlice of bytes back into a BivariatePolynomial
-fn host_slice_to_bivariate_polynomial(
-    host_slice: &[u8],
-    x_degree: usize,
-    y_degree: usize,
-) -> BivariatePolynomial<FrElement> {
-    let element_count = (x_degree) * (y_degree);
-    let fr_elements = host_slice_to_fr_elements(host_slice, element_count);
-  
-    let mut coefficients: Vec<Vec<FrElement>> = vec![vec![]; x_degree];
-    for i in 0..(x_degree) {
-        for j in 0..(y_degree) {
-            coefficients[i].push(fr_elements[i * (y_degree) + j].clone());
-        }
+// Trait for point conversion to icicle format
+trait PointConversion {
+    fn to_icicle(&self) -> curve::G1Affine;
+    fn from_icicle(icicle: &curve::G1Projective) -> Result<Self, ByteConversionError>
+    where
+        Self: Sized;
+}
+
+impl PointConversion for BlsG1point {
+    fn to_icicle(&self) -> curve::G1Affine {
+        let s = self.to_affine();
+        let x = s.x().to_icicle();
+        let y = s.y().to_icicle();
+        curve::G1Affine { x, y }
     }
 
-    let ref_coeffs: Vec<&[FrElement]> = coefficients.iter().map(|v| v.as_slice()).collect();
-    BivariatePolynomial::new(&ref_coeffs)
+    fn from_icicle(icicle: &curve::G1Projective) -> Result<Self, ByteConversionError> {
+        Ok(Self::new([
+            ToIcicle::from_icicle(&icicle.x)?,
+            ToIcicle::from_icicle(&icicle.y)?,
+            ToIcicle::from_icicle(&icicle.z)?,
+        ]))
+    }
 }
 
 fn main() {
-    let bp = BivariatePolynomial::new(&[
-        &[FrElement::from(0x357afc97d7fcf759e8aa0195a32a2d9b05284522a3aa15731a70b8ed9ceb8927), FrElement::from(0x446333949fbb83a6eee08acaa6a55a3708a868d2031b6ff6bd49220ac2bf7f0f)],
-        &[FrElement::from(0x0b4e13ed7b6938a2e665d5632c5b81a57b4742ad1a369f14c0bf7193b22cb86a), FrElement::from(0x6468971c2e0156d06383e859e2dffe692691ef3e4a4a2b23929485bb3b188e8c)],
-    ]);
+    const LEN: usize = 20;
+    let eight: BLS12381FieldElement = FieldElement::from(8);
 
-    let flattened_elements = bp.flatten_out();
-
-    let coefficients_x_y: Vec<_> = flattened_elements
+    // Convert to UnsignedInteger as expected by msm
+    let scalars = vec![eight; LEN];
+    let lambda_scalars: Vec<UnsignedInteger<6>> = scalars
         .iter()
-        .map(|coefficient| coefficient.representative())
+        .map(|scalar| {
+            scalar.representative()
+            // let bytes = scalar.to_bytes_le();
+            // UnsignedInteger::from_hex(&hex::encode(bytes)).expect("Conversion failed")
+        })
         .collect();
     
-    let coefficients_x: Vec<_> = flattened_elements
-        .iter()
-        .map(|coefficient| coefficient.representative().limbs[3])
-        .collect();
+    
+    let lambda_points = (0..LEN).map(|_| point_times_5()).collect::<Vec<_>>();
 
-    let bytes = fr_elements_to_host_slice(&coefficients_x_y);
-    let host_slice: &[u8] = &bytes;
-    println!("coeff: {:?}", coefficients_x);
-    println!("host_slice: {:?}", host_slice);
-    println!("Original coefficients_x_y: {:?}", coefficients_x_y);
+    let expected = pippenger::msm(
+        &lambda_scalars,
+        &lambda_points,
+    )
+    .unwrap();
 
-    // Corrected assertion for length
-    assert!(host_slice.len() >= flattened_elements.len() * FrElement::from_raw(UnsignedInteger { limbs: [0; 4] }).as_bytes().len());
-
-    let recovered_bp = host_slice_to_bivariate_polynomial(&host_slice[..], bp.x_degree, bp.y_degree);
-
-    // println!("Original BivariatePolynomial: {:?}", bp);
-    // println!("Recovered BivariatePolynomial: {:?}", recovered_bp.flatten_out());
-    let flattend = recovered_bp.flatten_out();
-
-    let recovered_coefficients_x_y: Vec<_> = flattend
-        .iter()
-        .map(|coefficient| coefficient.value())
-        .collect();
-    println!("Recovered coefficient: {:?}", recovered_coefficients_x_y);
+    let res = bls12_381_g1_msm(&scalars, &lambda_points, None);
+        
+    assert_eq!(res, Ok(expected));
 }
 
+pub fn bls12_381_g1_msm(
+    scalars:&[BLS12381FieldElement],
+    points: &[BlsG1point],
+    config: Option<msm::MSMConfig>,
+) -> Result<BlsG1point, IcicleError> {
+    let mut cfg = config.unwrap_or(msm::MSMConfig::default());
+
+    let convert_scalars = scalars.iter()
+            .map(|scalar| ToIcicle::to_icicle_scalar(scalar))
+            .collect::<Vec<_>>();
+    let icicle_scalars = HostSlice::from_slice(&convert_scalars);
+
+    let convert_points = points
+        .iter()
+        .map(|point| PointConversion::to_icicle(point))
+        .collect::<Vec<_>>();
+
+    let icicle_points = HostSlice::from_slice(&convert_points);
+
+    let mut msm_results = DeviceVec::<curve::G1Projective>::cuda_malloc(1).unwrap();
+    let stream = CudaStream::create().unwrap();
+    cfg.ctx.stream = &stream;
+    cfg.is_async = true;
+    msm::msm(icicle_scalars, icicle_points, &cfg, &mut msm_results[..]).unwrap();
+
+    let mut msm_host_result = vec![curve::G1Projective::zero(); 1];
+
+    stream.synchronize().unwrap();
+    msm_results.copy_to_host(HostSlice::from_mut_slice(&mut msm_host_result[..])).unwrap();
+
+    stream.destroy().unwrap();
+    let res = PointConversion::from_icicle(&msm_host_result[0]).unwrap();
+    Ok(res)
+}
+
+fn point_times_5() -> BlsG1point {
+    let x = BLS12381FieldElement::from_hex_unchecked(
+        "32bcce7e71eb50384918e0c9809f73bde357027c6bf15092dd849aa0eac274d43af4c68a65fb2cda381734af5eecd5c",
+    );
+    let y = BLS12381FieldElement::from_hex_unchecked(
+        "11e48467b19458aabe7c8a42dc4b67d7390fdf1e150534caadddc7e6f729d8890b68a5ea6885a21b555186452b954d88",
+    );
+    BlsG1point::new([x, y, FieldElement::one()])
+}
